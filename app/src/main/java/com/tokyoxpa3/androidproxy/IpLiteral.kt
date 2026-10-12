@@ -14,7 +14,11 @@ object IpLiteral {
     private val IPV4_RE = Regex("""^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$""")
 
     fun parse(host: String): InetAddress? {
-        val looksLikeIpv4 = IPV4_RE.matches(host)
+        val ipv4 = IPV4_RE.matchEntire(host)
+        // 각 옥텟이 0..255인지 먼저 확인: "999.999.1.1"처럼 범위를 벗어나면 InetAddress가
+        // 리터럴로 보지 않고 호스트명으로 DNS 조회를 해 버린다(셀룰러가 아닌 기본 네트워크로 누출).
+        if (ipv4 != null && ipv4.groupValues.drop(1).any { it.toInt() > 255 }) return null
+        val looksLikeIpv4 = ipv4 != null
         val looksLikeIpv6 = host.contains(':') // IPv6 字面值必含冒號；hostname 不可能
         if (!looksLikeIpv4 && !looksLikeIpv6) return null
         return try {
