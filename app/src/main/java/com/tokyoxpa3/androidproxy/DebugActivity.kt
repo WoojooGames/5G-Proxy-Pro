@@ -27,6 +27,8 @@ import android.view.Gravity
 import com.tokyoxpa3.androidproxy.network.CellularNetworkManager
 import com.tokyoxpa3.androidproxy.network.HotspotManager
 import com.tokyoxpa3.androidproxy.network.PublicIPChecker
+import com.tokyoxpa3.androidproxy.network.WifiDirectGroupManager
+import com.tokyoxpa3.androidproxy.network.WifiDirectSettings
 
 class DebugActivity : Activity() {
     
@@ -47,6 +49,12 @@ class DebugActivity : Activity() {
     private lateinit var trafficDownloadValue: TextView
     private lateinit var trafficUploadTotal: TextView
     private lateinit var trafficDownloadTotal: TextView
+    // [Wi-Fi Direct] 設定欄位與目前 Group 狀態
+    private lateinit var wfdSwitch: Switch
+    private lateinit var wfdSuffixInput: EditText
+    private lateinit var wfdPassInput: EditText
+    private lateinit var wfdSsidPreview: TextView
+    private lateinit var wfdStatusText: TextView
     private var trafficPollingJob: Job? = null
     private var lastTrafficSample: LongArray? = null
     private var lastTrafficTime = 0L
@@ -54,6 +62,7 @@ class DebugActivity : Activity() {
     private var isRunning = false
     private var pendingNotificationPermission = false
     private val REQUEST_NOTIFICATION_PERMISSION = 1002
+    private val REQUEST_START_PERMISSIONS = 1003
     private val networkManager by lazy { CellularNetworkManager(this) }
     private val ipChecker by lazy { PublicIPChecker() }
     // [例外處理] SupervisorJob 讓單一子協程失敗不影響其他；CoroutineExceptionHandler
@@ -437,6 +446,7 @@ class DebugActivity : Activity() {
         rootLayout.addView(portLayout)
         rootLayout.addView(authLayout)
         rootLayout.addView(passLayout)
+        rootLayout.addView(createWifiDirectCard())
         rootLayout.addView(mainButton)
         rootLayout.addView(limitHintText)
         rootLayout.addView(ipCard)
@@ -604,6 +614,172 @@ class DebugActivity : Activity() {
         setContentView(scrollView)
     }
     
+    // ================= Wi-Fi Direct 設定卡 =================
+
+    private fun styledInput(ctx: Context) = EditText(ctx).apply {
+        gravity = Gravity.CENTER
+        setPadding(32, 24, 32, 24)
+        setTextColor(0xFF212529.toInt())
+        setHintTextColor(0xFFADB5BD.toInt())
+        background = GradientDrawable().apply {
+            setColor(0xFFE9ECEF.toInt())
+            cornerRadius = 8f
+            setStroke(2, 0xFFCED4DA.toInt())
+        }
+        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f)
+    }
+
+    private fun labeledRow(ctx: Context, label: String, input: View) = LinearLayout(ctx).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, 8, 0, 8)
+        addView(TextView(ctx).apply {
+            text = label
+            textSize = 16f
+            setTextColor(0xFF212529.toInt())
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        })
+        addView(input)
+    }
+
+    private fun createWifiDirectCard(): View = createCard().apply {
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = 48 }
+        val ctx = context
+        val canConfigure = android.os.Build.VERSION.SDK_INT >= 29
+
+        val header = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(TextView(ctx).apply {
+            text = getString(R.string.wfd_card_title)
+            textSize = 16f
+            setTextColor(0xFF212529.toInt())
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        wfdSwitch = Switch(ctx).apply {
+            isChecked = WifiDirectSettings.isEnabled(ctx)
+            setOnCheckedChangeListener { _, checked -> WifiDirectSettings.setEnabled(ctx, checked) }
+        }
+        header.addView(wfdSwitch)
+        addView(header)
+
+        wfdSuffixInput = styledInput(ctx).apply {
+            setText(WifiDirectSettings.suffix(ctx))
+            hint = WifiDirectSettings.DEFAULT_SUFFIX
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            isEnabled = canConfigure
+        }
+        addView(labeledRow(ctx, getString(R.string.wfd_ssid_label), wfdSuffixInput))
+
+        wfdSsidPreview = TextView(ctx).apply {
+            textSize = 12f
+            setTextColor(0xFF6C757D.toInt())
+            setPadding(8, 0, 8, 8)
+        }
+        addView(wfdSsidPreview)
+
+        wfdPassInput = styledInput(ctx).apply {
+            setText(WifiDirectSettings.passphrase(ctx))
+            hint = getString(R.string.wfd_pass_hint)
+            // 刻意明碼顯示：這組密碼本來就要抄給其他裝置
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            isEnabled = canConfigure
+        }
+        addView(labeledRow(ctx, getString(R.string.wfd_pass_label), wfdPassInput))
+
+        val bands = listOf(
+            WifiDirectGroupManager.Band.GHZ_5 to getString(R.string.wfd_band_5),
+            WifiDirectGroupManager.Band.GHZ_2 to getString(R.string.wfd_band_2),
+            WifiDirectGroupManager.Band.AUTO to getString(R.string.wfd_band_auto)
+        )
+        val bandGroup = RadioGroup(ctx).apply {
+            orientation = RadioGroup.HORIZONTAL
+            setPadding(0, 8, 0, 8)
+            isEnabled = canConfigure
+        }
+        val current = WifiDirectSettings.band(ctx)
+        bands.forEach { (band, label) ->
+            bandGroup.addView(RadioButton(ctx).apply {
+                id = View.generateViewId()
+                text = label
+                tag = band
+                isEnabled = canConfigure
+                setTextColor(0xFF495057.toInt())
+                isChecked = band == current
+                layoutParams = RadioGroup.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+        }
+        bandGroup.setOnCheckedChangeListener { group, checkedId ->
+            val band = group.findViewById<RadioButton>(checkedId)?.tag as? WifiDirectGroupManager.Band
+            if (band != null) WifiDirectSettings.setBand(ctx, band)
+        }
+        addView(labeledRow(ctx, getString(R.string.wfd_band_label), bandGroup.apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f)
+        }))
+
+        addView(TextView(ctx).apply {
+            text = getString(if (canConfigure) R.string.wfd_hint else R.string.wfd_hint_legacy)
+            textSize = 12f
+            setTextColor(0xFF6C757D.toInt())
+            setPadding(8, 8, 8, 8)
+        })
+
+        wfdStatusText = TextView(ctx).apply {
+            textSize = 14f
+            setTextColor(0xFF212529.toInt())
+            setPadding(8, 8, 8, 0)
+            setTextIsSelectable(true)
+        }
+        addView(wfdStatusText)
+
+        wfdSuffixInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                WifiDirectSettings.setSuffix(ctx, s?.toString()?.trim().orEmpty())
+                updateSsidPreview()
+            }
+        })
+        wfdPassInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val value = s?.toString().orEmpty()
+                // 不合法的值不存，避免下次啟動直接帶著壞密碼失敗；啟動前另有檢查提示
+                if (WifiDirectSettings.isValidPassphrase(value)) {
+                    WifiDirectSettings.setPassphrase(ctx, value)
+                    wfdPassInput.error = null
+                } else {
+                    wfdPassInput.error = getString(R.string.wfd_pass_invalid)
+                }
+            }
+        })
+        updateSsidPreview()
+        updateWifiDirectStatus()
+    }
+
+    private fun updateSsidPreview() {
+        wfdSsidPreview.text = if (android.os.Build.VERSION.SDK_INT >= 29) {
+            getString(R.string.wfd_ssid_preview, WifiDirectSettings.ssid(this))
+        } else {
+            getString(R.string.wfd_ssid_preview_legacy)
+        }
+    }
+
+    private fun updateWifiDirectStatus() {
+        val g = Socks5ProxyService.wifiDirectGroup
+        val port = portInput.text.toString().toIntOrNull() ?: 1080
+        wfdStatusText.text = if (g != null) {
+            getString(R.string.wfd_status_active, g.ssid, g.passphrase, g.ipv4, port, g.clientCount)
+        } else {
+            getString(R.string.wfd_status_inactive)
+        }
+    }
+
     private fun createCard() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(32, 32, 32, 32)
@@ -658,19 +834,78 @@ class DebugActivity : Activity() {
     }
 
     private fun continueStartProxyFlow() {
+        val wfdOn = WifiDirectSettings.isEnabled(this)
+        if (wfdOn && !checkWifiDirectPreconditions()) return
+
+        val needed = mutableListOf<String>()
         // Android 13+：要求通知權限，否則前景服務通知不會顯示
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
+            needed += android.Manifest.permission.POST_NOTIFICATIONS
+        }
+        if (wfdOn) {
+            val p = wifiDirectPermission()
+            if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) needed += p
+        }
+        if (needed.isNotEmpty()) {
             pendingNotificationPermission = true
-            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATION_PERMISSION)
+            requestPermissions(needed.toTypedArray(), REQUEST_START_PERMISSIONS)
             return
         }
         startProxyInternal()
     }
 
+    /** Wi-Fi Direct 建 Group 需要的執行期權限：13+ 免定位，12 以下只能要定位。 */
+    private fun wifiDirectPermission(): String =
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            android.Manifest.permission.NEARBY_WIFI_DEVICES
+        } else {
+            android.Manifest.permission.ACCESS_FINE_LOCATION
+        }
+
+    /**
+     * 啟動前檢查：密碼格式、Wi-Fi 無線電是否開啟（P2P 需要 Wi-Fi 開著，但不必連上任何 AP）。
+     * 回傳 false 時已自行提示使用者。
+     */
+    private fun checkWifiDirectPreconditions(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT >= 29 &&
+            !WifiDirectSettings.isValidPassphrase(wfdPassInput.text.toString())
+        ) {
+            wfdPassInput.error = getString(R.string.wfd_pass_invalid)
+            Toast.makeText(this, getString(R.string.wfd_pass_invalid), Toast.LENGTH_LONG).show()
+            return false
+        }
+        val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+        if (!wm.isWifiEnabled) {
+            Toast.makeText(this, getString(R.string.wfd_wifi_off), Toast.LENGTH_LONG).show()
+            try {
+                startActivity(
+                    if (android.os.Build.VERSION.SDK_INT >= 29) Intent(android.provider.Settings.Panel.ACTION_WIFI)
+                    else Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)
+                )
+            } catch (e: Exception) {}
+            return false
+        }
+        return true
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_START_PERMISSIONS && pendingNotificationPermission) {
+            pendingNotificationPermission = false
+            val results = permissions.zip(grantResults.toTypedArray()).toMap()
+            if (results[android.Manifest.permission.POST_NOTIFICATIONS] == PackageManager.PERMISSION_DENIED) {
+                Toast.makeText(this, getString(R.string.toast_notification_denied), Toast.LENGTH_LONG).show()
+            }
+            // Wi-Fi Direct 權限被拒就不啟動：沒有它 createGroup 一定失敗
+            if (results[wifiDirectPermission()] == PackageManager.PERMISSION_DENIED) {
+                Toast.makeText(this, getString(R.string.wfd_permission_denied), Toast.LENGTH_LONG).show()
+                return
+            }
+            startProxyInternal()
+            return
+        }
         if (requestCode == REQUEST_NOTIFICATION_PERMISSION && pendingNotificationPermission) {
             pendingNotificationPermission = false
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
@@ -737,6 +972,7 @@ class DebugActivity : Activity() {
         trafficPollingJob = activityScope.launch {
             while (Socks5ProxyService.isServiceRunning) {
                 updateTrafficStats()
+                updateWifiDirectStatus()
                 delay(1000)
             }
         }
@@ -748,6 +984,7 @@ class DebugActivity : Activity() {
         lastTrafficSample = null
         lastTrafficTime = 0L
         resetTrafficLabels()
+        updateWifiDirectStatus()
     }
 
     private fun resetTrafficLabels() {

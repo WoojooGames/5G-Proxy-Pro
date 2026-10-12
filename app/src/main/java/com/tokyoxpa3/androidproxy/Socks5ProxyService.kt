@@ -13,6 +13,8 @@ import android.content.SharedPreferences
 import com.tokyoxpa3.androidproxy.network.NetworkHealthClassifier
 import com.tokyoxpa3.androidproxy.network.NetworkHealthStatus
 import com.tokyoxpa3.androidproxy.network.VpnDetector
+import com.tokyoxpa3.androidproxy.network.WifiDirectGroupManager
+import com.tokyoxpa3.androidproxy.network.WifiDirectSettings
 import kotlinx.coroutines.*
 import java.io.Closeable
 
@@ -54,6 +56,9 @@ class Socks5ProxyService : Service() {
     // 「關掉再開」由 native 每秒對帳自行修復，不需要 Java 插手）。
     @Volatile
     private var lanBindAddrs: Set<String>? = null
+    // [Wi-Fi Direct] 手機自己當 GO 開的 Group。服務內部重建（restartProxy）時沿用，
+    // 只有停止 / 失敗 / 銷毀才移除，避免已連上的裝置被踢掉。
+    private val wifiDirect by lazy { WifiDirectGroupManager(this) }
 
     private val activeSockets = java.util.concurrent.ConcurrentHashMap<Int, Any>()
 
@@ -231,6 +236,10 @@ class Socks5ProxyService : Service() {
         @Volatile var restartCount = 0
         @Volatile var lastHealthCheck: String? = null
         @Volatile var onStatusChanged: ((ProxyStatus) -> Unit)? = null
+        // [Wi-Fi Direct] 目前 Group 資訊（UI 顯示 SSID / 密碼 / IP 用）；未啟用或已停止為 null
+        @Volatile var wifiDirectGroup: WifiDirectGroupManager.GroupInfo? = null
+        // 連續幾次看門狗查不到 Group 才判定消失並重建（避免 framework 短暫回 null 誤判）
+        private const val WFD_MISS_THRESHOLD = 2
 
         // 允許監聽的 LAN 介面前綴（Wi-Fi / 熱點 / USB 分享 / 乙太網路 / 藍牙 PAN）。
         // 刻意排除所有行動網路介面（rmnet/ccmni/wwan 等），避免代理暴露到 5G 網段。
@@ -377,6 +386,21 @@ class Socks5ProxyService : Service() {
                     return@launch
                 }
                 
+                // [Wi-Fi Direct] 先把 Group 開起來，p2p 介面拿到 192.168.49.1 之後
+                // 下面的 LAN 位址收集才收得到它（否則手機沒連 Wi-Fi 時會因為
+                // 「找不到 LAN 介面」直接失敗）。
+                if (WifiDirectSettings.isEnabled(this@Socks5ProxyService)) {
+                    updateNotification(getString(R.string.notification_wfd_creating), getString(R.string.notification_proxying))
+                    when (val r = wifiDirect.ensureGroup(WifiDirectSettings.config(this@Socks5ProxyService))) {
+                        is WifiDirectGroupManager.Result.Ok -> wifiDirectGroup = r.info
+                        is WifiDirectGroupManager.Result.Failed -> {
+                            failStop(wifiDirectErrorMessage(r))
+                            return@launch
+                        }
+                    }
+                    if (stopRequested) { wifiDirect.removeGroupAndClose(); stopSelf(); return@launch }
+                }
+
                 NativeEngine.socketProvider = { host, p, isUdp -> 
                     createSocketBoundToNetwork(host, p, isUdp) 
                 }
@@ -507,6 +531,43 @@ class Socks5ProxyService : Service() {
                         }
                     }
 
+                    // [Wi-Fi Direct 看門狗] Group 可能被系統拆掉（使用者關 Wi-Fi、其他 App
+                    // 搶走 P2P、framework 重啟）。連續查不到就重建；位址不變時 native 的
+                    // 每秒對帳會自己把 listener 綁回去，位址變了則由 refreshLanBindAddrs 接手。
+                    if (WifiDirectSettings.isEnabled(this@Socks5ProxyService)) {
+                        launch {
+                            var misses = 0
+                            while (isProxyRunning && !stopRequested) {
+                                delay(10000)
+                                if (stopRequested || !isProxyRunning) break
+                                val g = wifiDirect.currentGroup()
+                                if (g != null) {
+                                    misses = 0
+                                    wifiDirectGroup = g
+                                    continue
+                                }
+                                misses++
+                                if (misses < WFD_MISS_THRESHOLD) continue
+                                Log.w(TAG, "Wi-Fi Direct Group 消失，嘗試重建")
+                                when (val r = wifiDirect.ensureGroup(WifiDirectSettings.config(this@Socks5ProxyService))) {
+                                    is WifiDirectGroupManager.Result.Ok -> {
+                                        misses = 0
+                                        wifiDirectGroup = r.info
+                                        refreshLanBindAddrs("wifi-direct")
+                                        updateNotification(runningNotificationText(port))
+                                    }
+                                    is WifiDirectGroupManager.Result.Failed -> {
+                                        // 不停止代理：其他 LAN 介面（Wi-Fi/熱點/USB）可能仍在服務，
+                                        // 下一輪再試。
+                                        wifiDirectGroup = null
+                                        Log.w(TAG, "Wi-Fi Direct Group 重建失敗：${r.detail}")
+                                        updateNotification(wifiDirectErrorMessage(r))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // [偵測落檔] 每 5 分鐘把生命週期計數器 snapshot 落檔（release 版也有）
                     launch {
                         while (isProxyRunning && !stopRequested) {
@@ -518,10 +579,29 @@ class Socks5ProxyService : Service() {
                 }
 
                 updateStatus(ProxyStatus.RUNNING)
-                val nm = getSystemService(NotificationManager::class.java)
-                nm.notify(NOTIFICATION_ID, createNotification(getString(R.string.status_proxy_running), getString(R.string.notification_locked_format, port)))
+                updateNotification(runningNotificationText(port))
             } catch (e: Exception) { failStop(e.message) } finally { engineStarting = false }
         }
+    }
+
+    private fun updateNotification(text: String, title: String = getString(R.string.status_proxy_running)) {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.notify(NOTIFICATION_ID, createNotification(title, text))
+    }
+
+    private fun runningNotificationText(port: Int): String {
+        val g = wifiDirectGroup
+        return if (g != null) {
+            getString(R.string.notification_wfd_format, g.ssid, g.ipv4, port)
+        } else {
+            getString(R.string.notification_locked_format, port)
+        }
+    }
+
+    private fun wifiDirectErrorMessage(r: WifiDirectGroupManager.Result.Failed): String = when (r.reason) {
+        android.net.wifi.p2p.WifiP2pManager.BUSY -> getString(R.string.error_wfd_busy)
+        android.net.wifi.p2p.WifiP2pManager.P2P_UNSUPPORTED -> getString(R.string.error_wfd_unsupported)
+        else -> getString(R.string.error_wfd_failed, r.detail)
     }
 
     private fun updateStatus(status: ProxyStatus) {
@@ -541,6 +621,8 @@ class Socks5ProxyService : Service() {
         try { networkManager.releaseCellularNetwork() } catch (e: Exception) {}
         cellularNetwork = null
         lanBindAddrs = null
+        wifiDirectGroup = null
+        wifiDirect.removeGroupAndClose()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -568,6 +650,8 @@ class Socks5ProxyService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "收集 LAN 綁定位址失敗", e)
         }
+        // [Wi-Fi Direct] 部分廠商的 GO 介面名稱不在前綴清單內：直接補上 Group 的位址
+        wifiDirectGroup?.ipv4?.let { result.add(it) }
         return result.toTypedArray()
     }
 
@@ -609,8 +693,7 @@ class Socks5ProxyService : Service() {
             if (currentStatus == ProxyStatus.PAUSED) {
                 serviceScope.launch {
                     updateStatus(ProxyStatus.RUNNING)
-                    val nm = getSystemService(NotificationManager::class.java)
-                    nm.notify(NOTIFICATION_ID, createNotification(getString(R.string.status_proxy_running), getString(R.string.notification_locked_format, port)))
+                    updateNotification(runningNotificationText(port))
                 }
             }
         } else {
@@ -776,6 +859,8 @@ class Socks5ProxyService : Service() {
                 networkManager.releaseCellularNetwork()
                 cellularNetwork = null
                 lanBindAddrs = null
+                wifiDirectGroup = null
+                wifiDirect.removeGroup()
                 
                 activeSockets.values.forEach { 
                     if (it is Closeable) try { it.close() } catch(e: Exception){} 
@@ -981,6 +1066,8 @@ class Socks5ProxyService : Service() {
         try { networkManager.releaseCellularNetwork() } catch (e: Exception) {}
         cellularNetwork = null
         lanBindAddrs = null
+        wifiDirectGroup = null
+        wifiDirect.removeGroupAndClose()
         // [失敗訊息可見性] failStop() 剛把 FAILED + lastErrorMessage 推給 UI，緊接著
         // stopSelf() 就會走到這裡。若無條件改回 STOPPED，UI 上的失敗文字只存活一個
         // frame（使用者實測「只閃過幾毫秒，只看到服務已停止」），錯誤原因等於被吞掉。

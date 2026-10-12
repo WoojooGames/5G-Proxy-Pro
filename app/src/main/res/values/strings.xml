@@ -109,4 +109,28 @@ Also set this App\'s battery saver to \"No restrictions\".</string>
     <string name="traffic_upload_label">↑ UPLOAD</string>
     <string name="traffic_download_label">↓ DOWNLOAD</string>
     <string name="traffic_na">--</string>
+
+    <!-- Wi-Fi Direct -->
+    <string name="wfd_card_title">📡 Wi-Fi Direct Hotspot</string>
+    <string name="wfd_ssid_label">SSID: </string>
+    <string name="wfd_ssid_preview">Network name: %1$s</string>
+    <string name="wfd_ssid_preview_legacy">Android 9 and below: the system picks the network name</string>
+    <string name="wfd_pass_label">Password: </string>
+    <string name="wfd_pass_hint">8–63 characters</string>
+    <string name="wfd_pass_invalid">Password must be 8–63 ASCII characters</string>
+    <string name="wfd_band_label">Band: </string>
+    <string name="wfd_band_5">5 GHz</string>
+    <string name="wfd_band_2">2.4 GHz</string>
+    <string name="wfd_band_auto">Auto</string>
+    <string name="wfd_hint">Changes apply the next time the proxy starts. If 5 GHz fails the app retries with Auto.</string>
+    <string name="wfd_hint_legacy">Android 9 and below cannot set SSID, password or band; the system-generated values are shown below.</string>
+    <string name="wfd_status_active">Network: %1$s\nPassword: %2$s\nProxy (SOCKS5): %3$s:%4$d\nConnected devices: %5$d</string>
+    <string name="wfd_status_inactive">Wi-Fi Direct group not active</string>
+    <string name="wfd_wifi_off">Turn Wi-Fi on first (no need to connect to a network)</string>
+    <string name="wfd_permission_denied">Nearby devices / location permission is required to create the Wi-Fi Direct group</string>
+    <string name="notification_wfd_creating">Creating Wi-Fi Direct group…</string>
+    <string name="notification_wfd_format">%1$s · %2$s:%3$d</string>
+    <string name="error_wfd_busy">Wi-Fi Direct is busy. If this phone is connected to a Wi-Fi network, disconnect it and try again.</string>
+    <string name="error_wfd_unsupported">Wi-Fi Direct is unavailable (is Wi-Fi turned on?)</string>
+    <string name="error_wfd_failed">Wi-Fi Direct group failed: %1$s. If this phone is connected to a Wi-Fi network, disconnect it and try again.</string>
 </resources>

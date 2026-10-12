@@ -105,4 +105,28 @@
     <string name="traffic_upload_label">↑ 上傳</string>
     <string name="traffic_download_label">↓ 下載</string>
     <string name="traffic_na">--</string>
+
+    <!-- Wi-Fi Direct -->
+    <string name="wfd_card_title">📡 Wi-Fi Direct 熱點</string>
+    <string name="wfd_ssid_label">SSID：</string>
+    <string name="wfd_ssid_preview">網路名稱：%1$s</string>
+    <string name="wfd_ssid_preview_legacy">Android 9 以下由系統決定網路名稱</string>
+    <string name="wfd_pass_label">密碼：</string>
+    <string name="wfd_pass_hint">8–63 個字元</string>
+    <string name="wfd_pass_invalid">密碼須為 8–63 個 ASCII 字元</string>
+    <string name="wfd_band_label">頻段：</string>
+    <string name="wfd_band_5">5 GHz</string>
+    <string name="wfd_band_2">2.4 GHz</string>
+    <string name="wfd_band_auto">自動</string>
+    <string name="wfd_hint">變更在下次啟動代理時生效。5 GHz 失敗時會自動改用「自動」重試。</string>
+    <string name="wfd_hint_legacy">Android 9 以下無法指定 SSID、密碼與頻段，下方顯示系統產生的值。</string>
+    <string name="wfd_status_active">網路：%1$s\n密碼：%2$s\n代理 (SOCKS5)：%3$s:%4$d\n已連線裝置：%5$d</string>
+    <string name="wfd_status_inactive">Wi-Fi Direct Group 未啟用</string>
+    <string name="wfd_wifi_off">請先開啟 Wi-Fi（不必連上任何網路）</string>
+    <string name="wfd_permission_denied">建立 Wi-Fi Direct Group 需要「鄰近裝置／定位」權限</string>
+    <string name="notification_wfd_creating">正在建立 Wi-Fi Direct Group…</string>
+    <string name="notification_wfd_format">%1$s · %2$s:%3$d</string>
+    <string name="error_wfd_busy">Wi-Fi Direct 忙碌中。若手機已連上 Wi-Fi，請先中斷連線再試。</string>
+    <string name="error_wfd_unsupported">無法使用 Wi-Fi Direct（Wi-Fi 是否已開啟？）</string>
+    <string name="error_wfd_failed">Wi-Fi Direct Group 建立失敗：%1$s。若手機已連上 Wi-Fi，請先中斷連線再試。</string>
 </resources>
