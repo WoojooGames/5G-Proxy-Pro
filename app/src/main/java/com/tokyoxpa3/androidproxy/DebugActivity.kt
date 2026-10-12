@@ -126,6 +126,20 @@ class DebugActivity : Activity() {
         }
         
         updateNetworkStatus()
+        cleanupStaleWifiDirectGroup()
+    }
+
+    // [남은 그룹 정리] 강제 중지/LMK로 죽은 이전 프로세스가 남긴 그룹을, 프록시가 돌고 있지
+    // 않을 때 앱을 열면 치운다(그 순간엔 앱이 아무 코드도 실행할 수 없어 다음 실행이 최선).
+    private fun cleanupStaleWifiDirectGroup() {
+        if (Socks5ProxyService.isServiceRunning) return
+        val granted = WifiDirectManager.requiredPermissions().first().let {
+            checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
+        }
+        if (!granted) return
+        activityScope.launch(Dispatchers.IO) {
+            if (!Socks5ProxyService.isServiceRunning) WifiDirectManager(applicationContext).removeStaleGroup()
+        }
     }
 
     // 설정 화면에서 돌아왔을 때 점검 결과를 다시 반영한다.

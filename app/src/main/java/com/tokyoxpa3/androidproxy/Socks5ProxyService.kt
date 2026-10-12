@@ -271,6 +271,10 @@ class Socks5ProxyService : Service() {
                 .putString("last_java_crash", crashDetail)
                 .commit()
 
+            // [남은 그룹 정리] 크래시로 프로세스가 죽으면 onDestroy가 돌지 않는다. removeGroup은
+            // 시스템 서비스로 가는 단방향 메시지라 프로세스가 곧 죽어도 전달된다.
+            try { wifiDirect.stop() } catch (e: Throwable) {}
+
             originalHandler?.uncaughtException(thread, throwable)
         }
 

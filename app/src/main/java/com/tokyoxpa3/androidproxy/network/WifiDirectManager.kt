@@ -56,6 +56,8 @@ class WifiDirectManager(context: Context) {
         const val PREF_SSID = "wifi_direct_ssid"
         const val PREF_PASS = "wifi_direct_pass"
         const val PREF_5GHZ = "wifi_direct_5ghz"
+        // 마지막으로 연 그룹의 실제 SSID(9 이하는 시스템 랜덤 값). 남은 그룹 정리 시 "우리 것" 판별용.
+        const val PREF_LAST_SSID = "wifi_direct_last_ssid"
 
         private const val CALLBACK_TIMEOUT_MS = 5000L
         private const val GROUP_READY_TIMEOUT_MS = 10000L
@@ -173,6 +175,37 @@ class WifiDirectManager(context: Context) {
         val ch = channel ?: return false
         val g = requestGroup(mgr, ch) ?: return false
         return g.isGroupOwner
+    }
+
+    /**
+     * [남은 그룹 정리] 프로세스가 강제 종료되면(force-stop, LMK, 업데이트) onDestroy가 돌지 않아
+     * 그룹이 시스템에 남는다 — SSID는 보이는데 프록시는 없는 상태. 프록시 서비스가 돌고 있지 않을
+     * 때 호출하며, 현재 그룹이 마지막으로 우리가 연 SSID와 같을 때만 제거한다(다른 앱 그룹 보호).
+     * 권한이 없거나 P2P 미지원이면 조용히 false.
+     */
+    suspend fun removeStaleGroup(): Boolean {
+        val mgr = manager ?: return false
+        val lastSsid = appContext.getSharedPreferences("proxy_config", Context.MODE_PRIVATE)
+            .getString(PREF_LAST_SSID, null) ?: return false
+        val ch = channel ?: mgr.initialize(appContext, Looper.getMainLooper(), null).also { channel = it }
+        return try {
+            val g = requestGroup(mgr, ch)
+            if (g == null || !g.isGroupOwner || g.networkName != lastSsid) {
+                false
+            } else {
+                val r = action { mgr.removeGroup(ch, it) }
+                Log.w(TAG, "남은 P2P 그룹 제거 ($lastSsid): ${if (r == null) "성공" else failureReasonText(r)}")
+                r == null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "남은 P2P 그룹 정리 실패: ${e.message}")
+            false
+        } finally {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                try { ch.close() } catch (e: Exception) {}
+            }
+            channel = null
+        }
     }
 
     /** 그룹을 내리고 리소스를 정리한다. 한 번도 start하지 않았으면 아무것도 하지 않는다. */
@@ -298,6 +331,8 @@ class WifiDirectManager(context: Context) {
             frequencyMhz = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) group.frequency else 0,
             clients = group.clientList.map { Client(it.deviceName ?: "", it.deviceAddress ?: "") }
         )
+        appContext.getSharedPreferences("proxy_config", Context.MODE_PRIVATE)
+            .edit().putString(PREF_LAST_SSID, info.ssid).apply()
         setGroup(info)
         return info
     }
