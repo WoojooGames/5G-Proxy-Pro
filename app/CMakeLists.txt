@@ -7,6 +7,8 @@ set(CMAKE_C_STANDARD 11)
 # 設定編譯標誌
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -latomic")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--build-id=none")
+# [16KB 페이지] NDK 기본값에 기대지 않고 LOAD 세그먼트 정렬을 명시(4KB 기기에서도 동작)
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
 
 # 修正：移除重複的 native-lib.cpp
 # 只編譯 jni_bridge.c (JNI 入口) 和 simple-socks5.c (代理核心)

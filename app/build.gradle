@@ -63,7 +63,9 @@ android {
         }
     }
     
-    ndkVersion "26.3.11579264"
+    // [16KB 페이지] Android 15+ 16KB 페이지 기기 대응: NDK r28은 arm64 .so를 기본으로
+    // 16KB 정렬하고, AGP 8.5.1+는 압축하지 않은 .so를 APK 안에서 16KB 경계에 맞춘다.
+    ndkVersion "28.2.13676358"
 
     dependenciesInfo {
         // don't embed dependency metadata signing block; F-Droid scanner rejects it
