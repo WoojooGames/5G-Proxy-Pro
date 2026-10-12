@@ -122,6 +122,9 @@ tasks.register('cProtocolTest') {
                     'src/test/cpp/udp_dns_test.c']],
             [name: 'ghost_purge_test',
              srcs: ['src/test/cpp/ghost_purge_test.c']],
+            [name: 'http_proxy_test',
+             srcs: ['src/main/cpp/http_proxy.c',
+                    'src/test/cpp/http_proxy_test.c']],
         ]
         // [Linux 整合測試] epoll 引擎整合測試依賴 <sys/epoll.h>，僅在 Linux (CI) 執行。
         def isLinux = org.gradle.internal.os.OperatingSystem.current().isLinux()
@@ -130,6 +133,7 @@ tasks.register('cProtocolTest') {
                 name: 'epoll_integration_test',
                 srcs: ['src/main/cpp/simple-socks5.c',
                        'src/main/cpp/socks5_protocol.c',
+                       'src/main/cpp/http_proxy.c',
                        'src/main/cpp/conn_state.c',
                        'src/main/cpp/conn_forward.c',
                        'src/main/cpp/udp_conn.c',

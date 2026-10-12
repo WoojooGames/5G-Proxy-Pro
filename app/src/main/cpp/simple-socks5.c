@@ -18,6 +18,7 @@
 #include <time.h>
 
 #include "socks5_protocol.h"
+#include "http_proxy.h"
 #include "conn_state.h"
 #include "conn_forward.h"
 #include "udp_conn.h"
@@ -2189,6 +2190,113 @@ static void handle_handshake_job(pool_job_t job) {
     handle_handshake_fd(job.fd);
 }
 
+static void http_send_status(int fd, const char *status, const char *extra_headers) {
+    char resp[256];
+    int n = snprintf(resp, sizeof(resp),
+                     "HTTP/1.1 %s\r\n%sContent-Length: 0\r\nConnection: close\r\n\r\n",
+                     status, extra_headers ? extra_headers : "");
+    if (n > 0) send(fd, resp, (size_t)n, MSG_NOSIGNAL);
+}
+
+static int send_all(int fd, const char *p, size_t n) {
+    while (n > 0) {
+        ssize_t w = send(fd, p, n, MSG_NOSIGNAL);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+                if (poll(&pfd, 1, 3000) <= 0) return -1;
+                continue;
+            }
+            return -1;
+        }
+        p += w; n -= (size_t)w;
+    }
+    return 0;
+}
+
+// [HTTP 프록시] CONNECT 터널 + 평문 HTTP(absolute-form). 헤더 블록을 다 읽고
+// (SO_RCVTIMEO 3초 상속) 대상 연결은 SOCKS5 CONNECT와 같은 5G 경로/연결 한도를 쓴다.
+// 연결 후에는 handoff_to_worker로 넘겨 SOCKS5와 똑같이 epoll worker가 relay한다.
+static void handle_http_proxy(int client_fd) {
+    char buf[HTTP_PROXY_MAX_HEADER];
+    size_t len = 0;
+    http_proxy_req_t req;
+    int pr = 1;
+    while (pr == 1) {
+        ssize_t r = recv(client_fd, buf + len, sizeof(buf) - len, 0);
+        if (r <= 0) { close(client_fd); return; }
+        len += (size_t)r;
+        pr = http_proxy_parse(buf, len, &req);
+        if (pr == 1 && len >= sizeof(buf)) pr = -2;
+    }
+    if (pr == -2) { http_send_status(client_fd, "431 Request Header Fields Too Large", NULL); close(client_fd); return; }
+    if (pr != 0) { http_send_status(client_fd, "400 Bad Request", NULL); close(client_fd); return; }
+
+    // 인증: SOCKS5와 같은 계정. 켜져 있으면 Proxy-Authorization: Basic 필수.
+    char auth_user[256] = {0};
+    char auth_pass[256] = {0};
+    int auth_enabled;
+    pthread_mutex_lock(&g_auth_lock);
+    auth_enabled = g_auth_enabled;
+    if (auth_enabled) {
+        memcpy(auth_user, g_auth_user, sizeof(auth_user) - 1);
+        memcpy(auth_pass, g_auth_pass, sizeof(auth_pass) - 1);
+    }
+    pthread_mutex_unlock(&g_auth_lock);
+    if (auth_enabled &&
+        !http_proxy_check_basic_auth(buf + req.auth_off, req.auth_len, auth_user, auth_pass)) {
+        atomic_fetch_add(&g_st_auth_fail, 1);
+        http_send_status(client_fd, "407 Proxy Authentication Required",
+                         "Proxy-Authenticate: Basic realm=\"proxy\"\r\n");
+        close(client_fd);
+        return;
+    }
+
+    struct timeval tv0 = {0, 0};
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv0, sizeof tv0);
+    if (atomic_fetch_add(&g_conn_count, 1) >= MAX_CONCURRENT_CONNS) {
+        atomic_fetch_sub(&g_conn_count, 1);
+        http_send_status(client_fd, "503 Service Unavailable", NULL);
+        close(client_fd);
+        return;
+    }
+    int target_fd = request_java_5g_socket(req.host, req.port, 0);
+    if (target_fd < 0) {
+        atomic_fetch_sub(&g_conn_count, 1);
+        atomic_fetch_add(&g_st_conn_fail, 1);
+        http_send_status(client_fd, "502 Bad Gateway", NULL);
+        close(client_fd);
+        return;
+    }
+
+    // 헤더 뒤에 이미 읽힌 바이트(예: CONNECT 직후 바로 보낸 TLS ClientHello, POST 본문)는
+    // relay 시작 전에 대상에 먼저 보낸다.
+    const char *extra = buf + req.header_len;
+    size_t extra_len = len - req.header_len;
+    int ok;
+    if (req.is_connect) {
+        static const char est[] = "HTTP/1.1 200 Connection Established\r\n\r\n";
+        ok = send_all(client_fd, est, sizeof(est) - 1) == 0 &&
+             (extra_len == 0 || send_all(target_fd, extra, extra_len) == 0);
+    } else {
+        char out[HTTP_PROXY_MAX_HEADER + 64];
+        int n = http_proxy_rewrite_request(buf, &req, out, sizeof(out));
+        ok = n > 0 && send_all(target_fd, out, (size_t)n) == 0 &&
+             (extra_len == 0 || send_all(target_fd, extra, extra_len) == 0);
+        if (n <= 0) http_send_status(client_fd, "431 Request Header Fields Too Large", NULL);
+    }
+    if (!ok) {
+        atomic_fetch_sub(&g_conn_count, 1);
+        // [fd 重用競態] SOCKS 경로와 같은 순서: release_java_socket 후 close.
+        release_java_socket(target_fd);
+        close(target_fd);
+        close(client_fd);
+        return;
+    }
+    handoff_to_worker(client_fd, target_fd);
+}
+
 // 由握手池 worker 呼叫：握手完成後 TCP 轉交 epoll worker，
 // UDP / UDP-in-TCP 則轉交專用 UDP session 池（避免長命 session 佔死握手執行緒）
 static void handle_handshake_fd(int client_fd) {
@@ -2198,6 +2306,13 @@ static void handle_handshake_fd(int client_fd) {
     // [健壯性] 回覆寫入同樣設 3 秒超時：握手 socket 為 blocking，慢速客戶端
     // （只連不讀的 slowloris 式）會讓 send() 無限阻塞、佔死握手執行緒。
     setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
+
+    // [HTTP 프록시] 같은 포트 공유: 첫 바이트가 HTTP 메서드(A-Z)면 HTTP 경로로.
+    if (recv(client_fd, buf, 1, MSG_PEEK) != 1) goto err;
+    if (http_proxy_looks_like_http(buf[0])) {
+        handle_http_proxy(client_fd);
+        return;
+    }
 
     if (recv(client_fd, buf, 2, MSG_WAITALL) != 2 || buf[0] != 0x05) goto err;
     int nmethods = buf[1];
