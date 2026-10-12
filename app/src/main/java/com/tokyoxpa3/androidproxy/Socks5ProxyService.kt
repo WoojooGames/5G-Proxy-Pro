@@ -40,6 +40,8 @@ class Socks5ProxyService : Service() {
     @Volatile
     private var loopsJob: Job? = null
     private var wakeLock: android.os.PowerManager.WakeLock? = null
+    // [백그라운드 안정성] Wi-Fi 절전 해제 잠금(옵션). 프록시가 도는 동안만 잡는다.
+    private val wifiLocks by lazy { BackgroundStability.WifiLocks(this) }
     
     private val networkManager by lazy { 
         com.tokyoxpa3.androidproxy.network.CellularNetworkManager(this) 
@@ -422,6 +424,9 @@ class Socks5ProxyService : Service() {
                 // [開發者開關] 每次啟動都重新套用一次：native 端的旗標是 process 全域，
                 // 但服務可能被系統回收後重建，不能假設它還留著。
                 NativeEngine.safeSetUdpVerboseLog(prefs.getBoolean(PREF_UDP_VERBOSE_LOG, false))
+                // [백그라운드 안정성] 스레드 우선순위는 엔진 시작 전에, Wi-Fi 잠금은 매 시작마다 반영.
+                NativeEngine.safeSetHighPriority(BackgroundStability.highPriorityEnabled(this@Socks5ProxyService))
+                if (BackgroundStability.wifiLockEnabled(this@Socks5ProxyService)) wifiLocks.acquire() else wifiLocks.release()
                 
                 // [Wi-Fi Direct] 그룹이 떠서 p2p 인터페이스에 주소가 붙은 뒤에야
                 // collectLanBindAddresses가 192.168.49.1을 수집할 수 있다.
@@ -570,6 +575,7 @@ class Socks5ProxyService : Service() {
         stopNativeEngineSafely()
         try { networkManager.releaseCellularNetwork() } catch (e: Exception) {}
         wifiDirect.stop()
+        wifiLocks.release()
         cellularNetwork = null
         lanBindAddrs = null
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -858,7 +864,8 @@ class Socks5ProxyService : Service() {
                 stopNativeEngineSafely()
                 networkManager.releaseCellularNetwork()
                 wifiDirect.stop()
-                        cellularNetwork = null
+                wifiLocks.release()
+                cellularNetwork = null
                 lanBindAddrs = null
                 
                 activeSockets.values.forEach { 
@@ -1064,6 +1071,7 @@ class Socks5ProxyService : Service() {
         activeSockets.clear()
         try { networkManager.releaseCellularNetwork() } catch (e: Exception) {}
         wifiDirect.stop()
+        wifiLocks.release()
         cellularNetwork = null
         lanBindAddrs = null
         // [失敗訊息可見性] failStop() 剛把 FAILED + lastErrorMessage 推給 UI，緊接著

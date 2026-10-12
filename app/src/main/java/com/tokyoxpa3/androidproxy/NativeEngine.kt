@@ -137,6 +137,16 @@ object NativeEngine {
         }
     }
 
+    // [백그라운드 안정성] relay 스레드 고우선 처리. 서버 시작 전에 설정해야 적용된다.
+    external fun setHighPriority(on: Boolean)
+
+    fun safeSetHighPriority(on: Boolean) {
+        if (!libraryLoaded) return
+        try { setHighPriority(on) } catch (e: Throwable) {
+            Log.w(TAG, "setHighPriority($on) 실패: ${e.message}")
+        }
+    }
+
     // [開發者開關] 安全套用逐行拆除 log 開關。失敗只記一筆 warning —— 這是診斷
     // 功能，不該因為它而影響代理運作。
     fun safeSetUdpVerboseLog(on: Boolean) {

@@ -14,4 +14,14 @@
     <string name="wifi_direct_permission_denied">Wi-Fi Direct에는 근처 기기/위치 권한이 필요합니다</string>
     <string name="error_wifi_direct">Wi-Fi Direct 실패: %1$s</string>
     <string name="notification_wifi_direct_format">%1$s · %2$s:%3$d</string>
+    <string name="stability_title">🔋 백그라운드 안정성</string>
+    <string name="stability_wifi_lock">Wi-Fi 절전 해제 (Wi-Fi 잠금)</string>
+    <string name="stability_high_priority">패킷 처리 우선순위 높이기</string>
+    <string name="stability_hint">옵션은 다음 시작 때 적용됩니다. CPU 깨우기(WakeLock)와 포그라운드 서비스는 항상 켜져 있습니다.</string>
+    <string name="stability_check_battery">배터리 최적화 제외됨</string>
+    <string name="stability_check_background">백그라운드 사용 제한 없음</string>
+    <string name="stability_check_data_saver">데이터 절약 모드에 막히지 않음</string>
+    <string name="stability_vendor_hint">삼성 등: 앱 정보 → 배터리 → \"제한 없음\" 선택, 잠자는 앱 목록에서 제외</string>
+    <string name="stability_fix">설정</string>
+    <string name="stability_open_app_settings">앱 정보</string>
 </resources>

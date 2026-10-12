@@ -16,6 +16,8 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <time.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 
 #include "socks5_protocol.h"
 #include "http_proxy.h"
@@ -38,6 +40,21 @@ extern void release_java_socket(int fd);
 #define LOG_TAG "SimpleSocks5"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+// [백그라운드 안정성] 켜져 있으면 relay/핸드셰이크/리스너 스레드의 nice를 낮춰(-10)
+// 화면이 꺼져 CPU 클럭이 내려가거나 다른 앱과 경합할 때도 패킷 처리를 먼저 받게 한다.
+// Android 앱은 권한 없이 음수 nice를 쓸 수 있다(THREAD_PRIORITY_URGENT_DISPLAY = -8).
+// 서버 시작 전에 설정해야 새로 뜨는 스레드에 적용된다.
+static atomic_int g_high_priority = 0;
+#define HIGH_PRIORITY_NICE (-10)
+
+static void apply_thread_priority(void) {
+    if (!atomic_load(&g_high_priority)) return;
+    pid_t tid = (pid_t)syscall(SYS_gettid);
+    if (setpriority(PRIO_PROCESS, (id_t)tid, HIGH_PRIORITY_NICE) != 0) {
+        LOGE("스레드 우선순위 상향 실패 tid=%d errno=%d", (int)tid, errno);
+    }
+}
 
 #define BUFFER_SIZE (64 * 1024)
 #define MAX_EVENTS 512
@@ -375,6 +392,7 @@ static void conn_unref(full_conn_t *conn) {
 
 static void* worker_loop_safe(void* arg) {
     jni_attach_thread();
+    apply_thread_priority();
     worker_t *me = (worker_t*)arg;
     int my_widx = (int)(me - workers); // 自身 worker 索引，用於殘留事件防禦
     struct epoll_event events[MAX_EVENTS];
@@ -1687,6 +1705,7 @@ static void udp_update_events(udp_worker_t *w, udp_conn_t *u) {
 
 static void* udp_worker_loop(void* arg) {
     jni_attach_thread();
+    apply_thread_priority();
     udp_worker_t *me = (udp_worker_t*)arg;
     struct epoll_event events[MAX_EVENTS];
     udp_conn_t *garbage[MAX_EVENTS];
@@ -2126,6 +2145,7 @@ static void* job_pool_worker(void* arg) {
     job_pool_t *p = (job_pool_t *)arg;
     // [item4] 執行緒永久綁定 JVM，取代每次 JNI 呼叫的 attach/detach
     jni_attach_thread();
+    apply_thread_priority();
     for (;;) {
         pool_job_t job;
         pthread_mutex_lock(&p->lock);
@@ -2557,6 +2577,7 @@ static void reconcile_listeners(int port) {
 }
 
 static void* listener_task(void* arg) {
+    apply_thread_priority();
     ListenerArgs *args = (ListenerArgs *)arg;
     int port = args->port;
     free(args);
@@ -2760,6 +2781,11 @@ int socks5_server_get_udp_close_stats(char *out, size_t out_len) {
 
 // [開發者開關] 逐行拆除 log 的執行期開關（不必重啟 server）。
 // 預設關：一般使用者不需要它，開了只會把 logcat 沖掉。
+int socks5_server_set_high_priority(int on) {
+    atomic_store(&g_high_priority, on ? 1 : 0);
+    return 0;
+}
+
 int socks5_server_set_udp_verbose_log(int on) {
     atomic_store(&g_udp_verbose_log, on ? 1 : 0);
     return 0;

@@ -48,6 +48,7 @@ class DebugActivity : Activity() {
     private lateinit var wifiDirectSsidInput: EditText
     private lateinit var wifiDirectPassInput: EditText
     private lateinit var wifiDirectStatusText: TextView
+    private lateinit var stabilityChecksLayout: LinearLayout
     private lateinit var selfTestResultText: TextView
     private lateinit var trafficUploadValue: TextView
     private lateinit var trafficDownloadValue: TextView
@@ -125,6 +126,12 @@ class DebugActivity : Activity() {
         }
         
         updateNetworkStatus()
+    }
+
+    // 설정 화면에서 돌아왔을 때 점검 결과를 다시 반영한다.
+    override fun onResume() {
+        super.onResume()
+        renderStabilityChecks()
     }
 
     override fun onDestroy() {
@@ -533,6 +540,7 @@ class DebugActivity : Activity() {
             addView(cols)
         }
         rootLayout.addView(trafficCard)
+        rootLayout.addView(createStabilityCard())
 
         // Diagnostics Card（自我檢測 + 複製診斷報告）
         val diagCard = createCard().apply {
@@ -717,6 +725,91 @@ class DebugActivity : Activity() {
             })
             addView(wifiDirectStatusText)
         }
+    }
+
+    // [백그라운드 안정성] 옵션 스위치 2개 + 시스템 제한 점검(상태 + 설정 바로가기).
+    private fun createStabilityCard(): LinearLayout {
+        val prefs = getSharedPreferences("proxy_config", Context.MODE_PRIVATE)
+        fun optionSwitch(labelRes: Int, key: String) = Switch(this).apply {
+            text = getString(labelRes)
+            textSize = 14f
+            setTextColor(0xFF212529.toInt())
+            setPadding(0, 8, 0, 8)
+            isChecked = prefs.getBoolean(key, true)
+            setOnCheckedChangeListener { _, checked -> prefs.edit().putBoolean(key, checked).apply() }
+        }
+        stabilityChecksLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 16, 0, 0)
+        }
+        return createCard().apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 48 }
+            addView(TextView(context).apply {
+                text = getString(R.string.stability_title)
+                textSize = 16f
+                setTextColor(0xFF212529.toInt())
+                setTypeface(null, android.graphics.Typeface.BOLD)
+            })
+            addView(optionSwitch(R.string.stability_wifi_lock, BackgroundStability.PREF_WIFI_LOCK))
+            addView(optionSwitch(R.string.stability_high_priority, BackgroundStability.PREF_HIGH_PRIORITY))
+            addView(TextView(context).apply {
+                text = getString(R.string.stability_hint)
+                textSize = 12f
+                setTextColor(0xFF6C757D.toInt())
+            })
+            addView(stabilityChecksLayout)
+        }
+    }
+
+    private fun renderStabilityChecks() {
+        if (!::stabilityChecksLayout.isInitialized) return
+        stabilityChecksLayout.removeAllViews()
+        fun row(ok: Boolean, labelRes: Int, onFix: () -> Unit) {
+            stabilityChecksLayout.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, 4, 0, 4)
+                addView(TextView(context).apply {
+                    text = (if (ok) "✅ " else "⚠️ ") + getString(labelRes)
+                    textSize = 14f
+                    setTextColor(if (ok) 0xFF495057.toInt() else 0xFFB02A37.toInt())
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                if (!ok) addView(Button(context).apply {
+                    text = getString(R.string.stability_fix)
+                    textSize = 12f
+                    setOnClickListener { onFix() }
+                })
+            })
+        }
+        row(BackgroundStability.isBatteryOptimizationIgnored(this), R.string.stability_check_battery) {
+            PowerPermissionHelper.requestIgnoreBatteryOptimization(this)
+        }
+        row(!BackgroundStability.isBackgroundRestricted(this), R.string.stability_check_background) {
+            BackgroundStability.openAppDetails(this)
+        }
+        row(!BackgroundStability.isDataSaverBlocking(this), R.string.stability_check_data_saver) {
+            BackgroundStability.openDataSaverException(this)
+        }
+        // 제조사 자체 절전(삼성 "절전 예외 앱/잠자는 앱" 등)은 API로 확인할 수 없어 안내 + 앱 정보 바로가기만 둔다.
+        stabilityChecksLayout.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 4, 0, 4)
+            addView(TextView(context).apply {
+                text = "ℹ️ " + getString(R.string.stability_vendor_hint)
+                textSize = 13f
+                setTextColor(0xFF6C757D.toInt())
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            addView(Button(context).apply {
+                text = getString(R.string.stability_open_app_settings)
+                textSize = 12f
+                setOnClickListener { BackgroundStability.openAppDetails(this@DebugActivity) }
+            })
+        })
     }
 
     private fun renderWifiDirectStatus(group: WifiDirectManager.GroupInfo?) {

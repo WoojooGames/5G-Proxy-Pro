@@ -32,6 +32,7 @@ extern int socks5_server_get_dns_stats(char *out, size_t out_len);
 // 計數讓使用者不必開 log 也能看見 churn；開關只影響逐行明細。
 extern int socks5_server_get_udp_close_stats(char *out, size_t out_len);
 extern int socks5_server_set_udp_verbose_log(int on);
+extern int socks5_server_set_high_priority(int on);
 
 static pthread_t g_server_thread;
 static int g_server_running = 0;
@@ -263,6 +264,10 @@ JNIEXPORT jstring JNICALL native_get_udp_close_stats(JNIEnv *env, jobject thiz) 
 }
 
 // [開發者開關] 逐行拆除 log。執行期可切換，不必重啟 server。
+JNIEXPORT void JNICALL native_set_high_priority(JNIEnv *env, jobject thiz, jboolean on) {
+    socks5_server_set_high_priority(on == JNI_TRUE ? 1 : 0);
+}
+
 JNIEXPORT void JNICALL native_set_udp_verbose_log(JNIEnv *env, jobject thiz, jboolean on) {
     socks5_server_set_udp_verbose_log(on == JNI_TRUE ? 1 : 0);
 }
@@ -279,6 +284,7 @@ static const JNINativeMethod gMethods[] = {
     {"getDnsStats", "()Ljava/lang/String;", (void *)native_get_dns_stats},
     {"getUdpCloseStats", "()Ljava/lang/String;", (void *)native_get_udp_close_stats},
     {"setUdpVerboseLog", "(Z)V", (void *)native_set_udp_verbose_log},
+    {"setHighPriority", "(Z)V", (void *)native_set_high_priority},
 };
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
