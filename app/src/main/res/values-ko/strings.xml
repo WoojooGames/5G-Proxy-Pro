@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wifi_direct_switch">📡 Wi-Fi Direct 그룹 열기 (폰이 AP 역할)</string>
+    <string name="wifi_direct_5ghz_switch">5GHz 우선</string>
+    <string name="wifi_direct_ssid_label">SSID: </string>
+    <string name="wifi_direct_pass_label">Wi-Fi 비번: </string>
+    <string name="wifi_direct_hint_legacy">Android 9 이하: SSID/비밀번호는 시스템이 정합니다 (시작 후 아래에 표시)</string>
+    <string name="wifi_direct_hint_apply">변경 사항은 다음 시작 때 적용됩니다</string>
+    <string name="wifi_direct_inactive">Wi-Fi Direct 그룹: 비활성</string>
+    <string name="wifi_direct_status_format">Wi-Fi Direct: %1$s\n비밀번호: %2$s\n프록시: %3$s:%4$d (SOCKS5)\n인터페이스: %5$s · %6$s\n접속 기기 (%7$d): %8$s</string>
+    <string name="wifi_direct_no_clients">없음</string>
+    <string name="wifi_direct_invalid_ssid">SSID는 \"DIRECT-\" + 영숫자 2자로 시작해야 합니다 (최대 32바이트)</string>
+    <string name="wifi_direct_invalid_pass">Wi-Fi 비밀번호는 8~63자 ASCII여야 합니다</string>
+    <string name="wifi_direct_permission_denied">Wi-Fi Direct에는 근처 기기/위치 권한이 필요합니다</string>
+    <string name="error_wifi_direct">Wi-Fi Direct 실패: %1$s</string>
+    <string name="notification_wifi_direct_format">%1$s · %2$s:%3$d</string>
+</resources>

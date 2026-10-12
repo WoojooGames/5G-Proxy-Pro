@@ -27,6 +27,7 @@ import android.view.Gravity
 import com.tokyoxpa3.androidproxy.network.CellularNetworkManager
 import com.tokyoxpa3.androidproxy.network.HotspotManager
 import com.tokyoxpa3.androidproxy.network.PublicIPChecker
+import com.tokyoxpa3.androidproxy.network.WifiDirectManager
 
 class DebugActivity : Activity() {
     
@@ -42,6 +43,11 @@ class DebugActivity : Activity() {
     private lateinit var selfTestButton: Button
     private lateinit var copyDiagnosticsButton: Button
     private lateinit var udpVerboseSwitch: Switch
+    private lateinit var wifiDirectSwitch: Switch
+    private lateinit var wifiDirect5gSwitch: Switch
+    private lateinit var wifiDirectSsidInput: EditText
+    private lateinit var wifiDirectPassInput: EditText
+    private lateinit var wifiDirectStatusText: TextView
     private lateinit var selfTestResultText: TextView
     private lateinit var trafficUploadValue: TextView
     private lateinit var trafficDownloadValue: TextView
@@ -54,6 +60,7 @@ class DebugActivity : Activity() {
     private var isRunning = false
     private var pendingNotificationPermission = false
     private val REQUEST_NOTIFICATION_PERMISSION = 1002
+    private val REQUEST_START_PERMISSIONS = 1003
     private val networkManager by lazy { CellularNetworkManager(this) }
     private val ipChecker by lazy { PublicIPChecker() }
     // [例外處理] SupervisorJob 讓單一子協程失敗不影響其他；CoroutineExceptionHandler
@@ -71,6 +78,9 @@ class DebugActivity : Activity() {
     private val statusListener: (Socks5ProxyService.ProxyStatus) -> Unit = { status ->
         activityScope.launch { onProxyStatusChanged(status) }
     }
+    private val wifiDirectListener: (WifiDirectManager.GroupInfo?) -> Unit = { group ->
+        activityScope.launch { renderWifiDirectStatus(group) }
+    }
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,6 +92,8 @@ class DebugActivity : Activity() {
         
         // 訂閱 Service 狀態變更，UI 與真實狀態同步
         Socks5ProxyService.onStatusChanged = statusListener
+        WifiDirectManager.onGroupChanged = wifiDirectListener
+        renderWifiDirectStatus(WifiDirectManager.currentGroup)
         
         // 檢查上次退出原因
         checkLastExitReason()
@@ -118,6 +130,9 @@ class DebugActivity : Activity() {
     override fun onDestroy() {
         if (Socks5ProxyService.onStatusChanged === statusListener) {
             Socks5ProxyService.onStatusChanged = null
+        }
+        if (WifiDirectManager.onGroupChanged === wifiDirectListener) {
+            WifiDirectManager.onGroupChanged = null
         }
         activityScope.cancel()
         super.onDestroy()
@@ -354,6 +369,8 @@ class DebugActivity : Activity() {
         }
         authUserInput.addTextChangedListener(authWatcher)
         authPassInput.addTextChangedListener(authWatcher)
+
+        val wifiDirectCard = createWifiDirectCard()
         
         // Main Action Button
         mainButton = Button(this).apply {
@@ -437,6 +454,7 @@ class DebugActivity : Activity() {
         rootLayout.addView(portLayout)
         rootLayout.addView(authLayout)
         rootLayout.addView(passLayout)
+        rootLayout.addView(wifiDirectCard)
         rootLayout.addView(mainButton)
         rootLayout.addView(limitHintText)
         rootLayout.addView(ipCard)
@@ -604,6 +622,127 @@ class DebugActivity : Activity() {
         setContentView(scrollView)
     }
     
+    // [Wi-Fi Direct] 그룹 on/off, SSID/비밀번호(Android 10+만 고정 가능), 5GHz, 현재 상태.
+    private fun createWifiDirectCard(): LinearLayout {
+        val prefs = getSharedPreferences("proxy_config", Context.MODE_PRIVATE)
+        val (ssid, pass) = WifiDirectManager.loadOrCreateCredentials(prefs)
+        val canFixCredentials = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
+
+        fun input(value: String) = EditText(this).apply {
+            setText(value)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            isSingleLine = true
+            gravity = Gravity.CENTER
+            setPadding(32, 24, 32, 24)
+            setTextColor(0xFF212529.toInt())
+            isEnabled = canFixCredentials
+            background = GradientDrawable().apply {
+                setColor(0xFFE9ECEF.toInt())
+                cornerRadius = 8f
+                setStroke(2, 0xFFCED4DA.toInt())
+            }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f)
+        }
+        fun row(labelRes: Int, field: View) = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 8, 0, 8)
+            addView(TextView(context).apply {
+                text = getString(labelRes)
+                textSize = 16f
+                setTextColor(0xFF212529.toInt())
+                setTypeface(null, android.graphics.Typeface.BOLD)
+            })
+            addView(field)
+        }
+
+        wifiDirectSwitch = Switch(this).apply {
+            text = getString(R.string.wifi_direct_switch)
+            textSize = 16f
+            setTextColor(0xFF212529.toInt())
+            isChecked = prefs.getBoolean(WifiDirectManager.PREF_ENABLED, false)
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(WifiDirectManager.PREF_ENABLED, checked).apply()
+            }
+        }
+        wifiDirect5gSwitch = Switch(this).apply {
+            text = getString(R.string.wifi_direct_5ghz_switch)
+            textSize = 14f
+            setTextColor(0xFF495057.toInt())
+            isChecked = prefs.getBoolean(WifiDirectManager.PREF_5GHZ, true)
+            isEnabled = canFixCredentials
+            setPadding(0, 8, 0, 8)
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(WifiDirectManager.PREF_5GHZ, checked).apply()
+            }
+        }
+        wifiDirectSsidInput = input(ssid)
+        wifiDirectPassInput = input(pass)
+        // 유효한 값만 저장한다. 잘못된 값은 시작 시 검증에서 걸러 사용자에게 알린다.
+        val credWatcher = object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val editor = prefs.edit()
+                val newSsid = wifiDirectSsidInput.text.toString().trim()
+                val newPass = wifiDirectPassInput.text.toString()
+                if (WifiDirectManager.isValidNetworkName(newSsid)) editor.putString(WifiDirectManager.PREF_SSID, newSsid)
+                if (WifiDirectManager.isValidPassphrase(newPass)) editor.putString(WifiDirectManager.PREF_PASS, newPass)
+                editor.apply()
+            }
+        }
+        wifiDirectSsidInput.addTextChangedListener(credWatcher)
+        wifiDirectPassInput.addTextChangedListener(credWatcher)
+
+        wifiDirectStatusText = TextView(this).apply {
+            text = getString(R.string.wifi_direct_inactive)
+            textSize = 14f
+            setTextColor(0xFF495057.toInt())
+            setPadding(0, 16, 0, 0)
+            setTextIsSelectable(true)
+        }
+
+        return createCard().apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = 48 }
+            addView(wifiDirectSwitch)
+            addView(row(R.string.wifi_direct_ssid_label, wifiDirectSsidInput))
+            addView(row(R.string.wifi_direct_pass_label, wifiDirectPassInput))
+            addView(wifiDirect5gSwitch)
+            addView(TextView(context).apply {
+                text = getString(if (canFixCredentials) R.string.wifi_direct_hint_apply else R.string.wifi_direct_hint_legacy)
+                textSize = 12f
+                setTextColor(0xFF6C757D.toInt())
+            })
+            addView(wifiDirectStatusText)
+        }
+    }
+
+    private fun renderWifiDirectStatus(group: WifiDirectManager.GroupInfo?) {
+        if (!::wifiDirectStatusText.isInitialized) return
+        if (group == null) {
+            wifiDirectStatusText.text = getString(R.string.wifi_direct_inactive)
+            return
+        }
+        val port = portInput.text.toString().toIntOrNull() ?: 1080
+        val band = when {
+            group.frequencyMhz >= 5000 -> "5GHz (${group.frequencyMhz}MHz)"
+            group.frequencyMhz > 0 -> "2.4GHz (${group.frequencyMhz}MHz)"
+            else -> "-"
+        }
+        val clients = if (group.clients.isEmpty()) {
+            getString(R.string.wifi_direct_no_clients)
+        } else {
+            group.clients.joinToString("\n", prefix = "\n") { "• ${it.name.ifEmpty { "?" }} (${it.mac})" }
+        }
+        wifiDirectStatusText.text = getString(
+            R.string.wifi_direct_status_format,
+            group.ssid, group.passphrase, group.ownerIp, port,
+            group.iface ?: "-", band, group.clients.size, clients
+        )
+    }
+
     private fun createCard() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(32, 32, 32, 32)
@@ -658,6 +797,32 @@ class DebugActivity : Activity() {
     }
 
     private fun continueStartProxyFlow() {
+        if (wifiDirectSwitch.isChecked && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            if (!WifiDirectManager.isValidNetworkName(wifiDirectSsidInput.text.toString().trim())) {
+                Toast.makeText(this, getString(R.string.wifi_direct_invalid_ssid), Toast.LENGTH_LONG).show()
+                return
+            }
+            if (!WifiDirectManager.isValidPassphrase(wifiDirectPassInput.text.toString())) {
+                Toast.makeText(this, getString(R.string.wifi_direct_invalid_pass), Toast.LENGTH_LONG).show()
+                return
+            }
+        }
+        // [Wi-Fi Direct] 그룹 생성 권한(13+: 근처 기기, 그 이하: 위치)은 필수 —
+        // 거부되면 시작하지 않는다. 알림 권한은 기존처럼 거부돼도 계속 진행.
+        if (wifiDirectSwitch.isChecked) {
+            val missing = WifiDirectManager.requiredPermissions().filter {
+                checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
+            }.toMutableList()
+            if (missing.isNotEmpty()) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+                    checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    missing.add(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+                requestPermissions(missing.toTypedArray(), REQUEST_START_PERMISSIONS)
+                return
+            }
+        }
         // Android 13+：要求通知權限，否則前景服務通知不會顯示
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -671,6 +836,18 @@ class DebugActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_START_PERMISSIONS) {
+            // 위치는 FINE/COARSE 중 하나만 허용돼도(대략적 위치) 시스템이 거부하므로 FINE 기준으로 판단.
+            val wifiDirectGranted = WifiDirectManager.requiredPermissions().first().let {
+                checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
+            }
+            if (!wifiDirectGranted) {
+                Toast.makeText(this, getString(R.string.wifi_direct_permission_denied), Toast.LENGTH_LONG).show()
+                return
+            }
+            startProxyInternal()
+            return
+        }
         if (requestCode == REQUEST_NOTIFICATION_PERMISSION && pendingNotificationPermission) {
             pendingNotificationPermission = false
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
@@ -699,6 +876,7 @@ class DebugActivity : Activity() {
         val intent = Intent(this, Socks5ProxyService::class.java).apply {
             action = Socks5ProxyService.ACTION_START_PROXY
             putExtra(Socks5ProxyService.EXTRA_PORT, port)
+            putExtra(Socks5ProxyService.EXTRA_WIFI_DIRECT, wifiDirectSwitch.isChecked)
         }
         startService(intent)
         

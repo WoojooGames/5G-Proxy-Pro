@@ -109,4 +109,19 @@ Also set this App\'s battery saver to \"No restrictions\".</string>
     <string name="traffic_upload_label">↑ UPLOAD</string>
     <string name="traffic_download_label">↓ DOWNLOAD</string>
     <string name="traffic_na">--</string>
+    <!-- Wi-Fi Direct -->
+    <string name="wifi_direct_switch">📡 Open Wi-Fi Direct group (phone acts as AP)</string>
+    <string name="wifi_direct_5ghz_switch">Prefer 5 GHz</string>
+    <string name="wifi_direct_ssid_label">SSID: </string>
+    <string name="wifi_direct_pass_label">Wi-Fi password: </string>
+    <string name="wifi_direct_hint_legacy">Android 9 and below: SSID/password are chosen by the system (shown below after start)</string>
+    <string name="wifi_direct_hint_apply">Changes apply on next start</string>
+    <string name="wifi_direct_inactive">Wi-Fi Direct group: not active</string>
+    <string name="wifi_direct_status_format">Wi-Fi Direct: %1$s\nPassword: %2$s\nProxy: %3$s:%4$d (SOCKS5)\nInterface: %5$s · %6$s\nConnected devices (%7$d): %8$s</string>
+    <string name="wifi_direct_no_clients">none</string>
+    <string name="wifi_direct_invalid_ssid">SSID must start with \"DIRECT-\" + 2 letters/digits (max 32 bytes)</string>
+    <string name="wifi_direct_invalid_pass">Wi-Fi password must be 8–63 ASCII characters</string>
+    <string name="wifi_direct_permission_denied">Wi-Fi Direct needs the Nearby devices / Location permission</string>
+    <string name="error_wifi_direct">Wi-Fi Direct failed: %1$s</string>
+    <string name="notification_wifi_direct_format">%1$s · %2$s:%3$d</string>
 </resources>

@@ -13,6 +13,7 @@ import android.content.SharedPreferences
 import com.tokyoxpa3.androidproxy.network.NetworkHealthClassifier
 import com.tokyoxpa3.androidproxy.network.NetworkHealthStatus
 import com.tokyoxpa3.androidproxy.network.VpnDetector
+import com.tokyoxpa3.androidproxy.network.WifiDirectManager
 import kotlinx.coroutines.*
 import java.io.Closeable
 
@@ -49,6 +50,11 @@ class Socks5ProxyService : Service() {
     }
     @Volatile
     private var cellularNetwork: android.net.Network? = null
+    // [Wi-Fi Direct] 폰이 직접 여는 P2P 그룹(legacy AP). 켜져 있으면 LAN 주소 수집 전에
+    // 그룹을 먼저 띄워 p2p-wlan0-N(192.168.49.1)이 리스너 대상에 포함되게 한다.
+    private val wifiDirect by lazy { WifiDirectManager(this) }
+    @Volatile
+    private var wifiDirectEnabled = false
     // [LAN 監聽重建] 最後一次送給 native 引擎的 LAN 綁定位址集合。用來判斷介面位址
     // 是否真的變了 —— 位址沒變時不重送，避免無謂地動 listener（同一位址的介面
     // 「關掉再開」由 native 每秒對帳自行修復，不需要 Java 插手）。
@@ -206,6 +212,7 @@ class Socks5ProxyService : Service() {
         const val ACTION_START_PROXY = "START_PROXY"
         const val ACTION_STOP_PROXY = "STOP_PROXY"
         const val EXTRA_PORT = "PROXY_PORT"
+        const val EXTRA_WIFI_DIRECT = "WIFI_DIRECT"
         // [偵測落檔] 生命週期計數器滾動落檔上限（超過則砍半保留最新）
         private const val STATS_LOG_MAX_BYTES = 64L * 1024
         private const val STATS_LOG_KEEP_BYTES = 32L * 1024
@@ -222,6 +229,9 @@ class Socks5ProxyService : Service() {
         // 預設 false：一般使用者不需要逐行明細，開了只會把 logcat 沖掉。拆除的
         // 「分類計數」不受此開關影響，永遠落檔 —— 所以預設也不會回到完全靜默。
         const val PREF_UDP_VERBOSE_LOG = "udp_verbose_log"
+        // [디버그 전용] true면 출구를 셀룰러 대신 기본 네트워크로 잡는다(debuggable 빌드만).
+        // UI 없음: adb shell run-as 로 shared_prefs/proxy_config.xml에 직접 넣어 쓴다.
+        const val PREF_DEBUG_EGRESS_DEFAULT = "debug_egress_default_network"
         @Volatile var isServiceRunning = false
 
         @Volatile var currentStatus = ProxyStatus.STOPPED
@@ -304,6 +314,10 @@ class Socks5ProxyService : Service() {
             // （restartProxy 走的是內部路徑，不會經過這裡）
             restartCount = 0
             lastHealthCheck = null
+            wifiDirectEnabled = intent.getBooleanExtra(
+                EXTRA_WIFI_DIRECT,
+                getSharedPreferences("proxy_config", MODE_PRIVATE).getBoolean(WifiDirectManager.PREF_ENABLED, false)
+            )
             startProxy(port)
         }
         return START_NOT_STICKY
@@ -351,13 +365,23 @@ class Socks5ProxyService : Service() {
                 // [重建迴圈修復] 先開始長期請求並監控：startMonitoring 用 requestNetwork
                 // 把蜂巢式 PDN 在服務期間 pin 住，避免「一次性 request 拿到就放掉」造成
                 // PDN 被系統收回 → onLost → 重建的自激迴圈。設定後再等目前可用的網路。
-                networkManager.startMonitoring(
-                    onAvailable = { newNetwork -> handleNetworkChange(port, newNetwork) },
-                    onLost = { handleNetworkChange(port, null) }
-                )
-                networkManager.awaitNetwork(15000)
+                // [디버그 전용] 셀룰러가 없는 테스트 기기에서 Wi-Fi Direct/리스너/SOCKS 경로를
+                // 시험하기 위한 우회: 출구를 기본 네트워크(보통 Wi-Fi)로 잡는다.
+                // release 빌드(isDebuggable=false)에서는 설정값과 무관하게 절대 켜지지 않는다.
+                val debugEgressDefault = isDebuggable &&
+                    getSharedPreferences("proxy_config", MODE_PRIVATE).getBoolean(PREF_DEBUG_EGRESS_DEFAULT, false)
+                val network = if (debugEgressDefault) {
+                    Log.w(TAG, "[DEBUG] 출구를 셀룰러 대신 기본 네트워크로 사용 ($PREF_DEBUG_EGRESS_DEFAULT=true)")
+                    connectivityManager.activeNetwork
+                } else {
+                    networkManager.startMonitoring(
+                        onAvailable = { newNetwork -> handleNetworkChange(port, newNetwork) },
+                        onLost = { handleNetworkChange(port, null) }
+                    )
+                    networkManager.awaitNetwork(15000)
+                    networkManager.currentNetwork()
+                }
                 if (stopRequested) { stopSelf(); return@launch }
-                val network = networkManager.currentNetwork()
                 if (network == null) { failStop(getString(R.string.error_cellular_unavailable)); return@launch }
                 cellularNetwork = network
 
@@ -399,6 +423,11 @@ class Socks5ProxyService : Service() {
                 // 但服務可能被系統回收後重建，不能假設它還留著。
                 NativeEngine.safeSetUdpVerboseLog(prefs.getBoolean(PREF_UDP_VERBOSE_LOG, false))
                 
+                // [Wi-Fi Direct] 그룹이 떠서 p2p 인터페이스에 주소가 붙은 뒤에야
+                // collectLanBindAddresses가 192.168.49.1을 수집할 수 있다.
+                if (wifiDirectEnabled && !startWifiDirectGroup()) return@launch
+                if (stopRequested) { stopSelf(); return@launch }
+
                 // 只綁定 LAN 介面（Wi-Fi/熱點/USB 分享），絕不綁到行動網路
                 val bindAddrs = collectLanBindAddresses()
                 if (bindAddrs.isEmpty()) {
@@ -503,6 +532,7 @@ class Socks5ProxyService : Service() {
                         while (isProxyRunning && !stopRequested) {
                             delay(5000)
                             if (stopRequested || !isProxyRunning) break
+                            if (wifiDirectEnabled) ensureWifiDirectGroup()
                             refreshLanBindAddrs("watchdog")
                         }
                     }
@@ -519,7 +549,7 @@ class Socks5ProxyService : Service() {
 
                 updateStatus(ProxyStatus.RUNNING)
                 val nm = getSystemService(NotificationManager::class.java)
-                nm.notify(NOTIFICATION_ID, createNotification(getString(R.string.status_proxy_running), getString(R.string.notification_locked_format, port)))
+                nm.notify(NOTIFICATION_ID, createNotification(getString(R.string.status_proxy_running), runningNotificationText(port)))
             } catch (e: Exception) { failStop(e.message) } finally { engineStarting = false }
         }
     }
@@ -539,10 +569,63 @@ class Socks5ProxyService : Service() {
         updateStatus(ProxyStatus.FAILED)
         stopNativeEngineSafely()
         try { networkManager.releaseCellularNetwork() } catch (e: Exception) {}
+        wifiDirect.stop()
         cellularNetwork = null
         lanBindAddrs = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    /**
+     * [Wi-Fi Direct] 그룹을 열고 p2p 인터페이스에 GO 주소가 실제로 붙을 때까지 기다린다.
+     * 실패하면 failStop까지 처리하고 false를 돌려준다.
+     */
+    private suspend fun startWifiDirectGroup(): Boolean {
+        val prefs = getSharedPreferences("proxy_config", MODE_PRIVATE)
+        val (ssid, pass) = WifiDirectManager.loadOrCreateCredentials(prefs)
+        val group = try {
+            wifiDirect.start(ssid, pass, prefs.getBoolean(WifiDirectManager.PREF_5GHZ, true))
+        } catch (e: Exception) {
+            failStop(getString(R.string.error_wifi_direct, e.message ?: e.javaClass.simpleName))
+            return false
+        }
+        Log.i(TAG, "Wi-Fi Direct 그룹 활성: ssid=${group.ssid} iface=${group.iface} ip=${group.ownerIp} freq=${group.frequencyMhz}")
+        val deadline = android.os.SystemClock.elapsedRealtime() + 10000
+        while (group.ownerIp !in collectLanBindAddresses()) {
+            if (stopRequested) return false
+            if (android.os.SystemClock.elapsedRealtime() > deadline) {
+                failStop(getString(R.string.error_wifi_direct, "${group.iface} 인터페이스에 ${group.ownerIp} 주소가 붙지 않았습니다"))
+                return false
+            }
+            delay(250)
+        }
+        return true
+    }
+
+    /**
+     * [Wi-Fi Direct] 워치독: Wi-Fi off/on, 다른 앱의 P2P 사용 등으로 시스템이 그룹을
+     * 내렸으면 다시 연다. 주소가 같으면 native reconcile이 리스너를 자동 복구한다.
+     * 실패해도 프록시는 내리지 않는다(다른 LAN 인터페이스로는 계속 서비스 가능).
+     */
+    private suspend fun ensureWifiDirectGroup() {
+        try {
+            if (wifiDirect.isGroupAlive()) return
+            Log.w(TAG, "Wi-Fi Direct 그룹이 내려가 있음 → 재생성 시도")
+            val prefs = getSharedPreferences("proxy_config", MODE_PRIVATE)
+            val (ssid, pass) = WifiDirectManager.loadOrCreateCredentials(prefs)
+            wifiDirect.start(ssid, pass, prefs.getBoolean(WifiDirectManager.PREF_5GHZ, true))
+        } catch (e: Exception) {
+            Log.w(TAG, "Wi-Fi Direct 그룹 재생성 실패: ${e.message}")
+        }
+    }
+
+    private fun runningNotificationText(port: Int): String {
+        val group = if (wifiDirectEnabled) WifiDirectManager.currentGroup else null
+        return if (group != null) {
+            getString(R.string.notification_wifi_direct_format, group.ssid, group.ownerIp, port)
+        } else {
+            getString(R.string.notification_locked_format, port)
+        }
     }
 
     /**
@@ -610,7 +693,7 @@ class Socks5ProxyService : Service() {
                 serviceScope.launch {
                     updateStatus(ProxyStatus.RUNNING)
                     val nm = getSystemService(NotificationManager::class.java)
-                    nm.notify(NOTIFICATION_ID, createNotification(getString(R.string.status_proxy_running), getString(R.string.notification_locked_format, port)))
+                    nm.notify(NOTIFICATION_ID, createNotification(getString(R.string.status_proxy_running), runningNotificationText(port)))
                 }
             }
         } else {
@@ -774,7 +857,8 @@ class Socks5ProxyService : Service() {
                 appendEngineStatsToFile() // 停止前記錄最後一筆 stats
                 stopNativeEngineSafely()
                 networkManager.releaseCellularNetwork()
-                cellularNetwork = null
+                wifiDirect.stop()
+                        cellularNetwork = null
                 lanBindAddrs = null
                 
                 activeSockets.values.forEach { 
@@ -979,6 +1063,7 @@ class Socks5ProxyService : Service() {
         }
         activeSockets.clear()
         try { networkManager.releaseCellularNetwork() } catch (e: Exception) {}
+        wifiDirect.stop()
         cellularNetwork = null
         lanBindAddrs = null
         // [失敗訊息可見性] failStop() 剛把 FAILED + lastErrorMessage 推給 UI，緊接著
