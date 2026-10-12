@@ -22,6 +22,9 @@
     <string name="stability_check_background">백그라운드 사용 제한 없음</string>
     <string name="stability_check_data_saver">데이터 절약 모드에 막히지 않음</string>
     <string name="stability_vendor_hint">삼성 등: 앱 정보 → 배터리 → \"제한 없음\" 선택, 잠자는 앱 목록에서 제외</string>
+    <string name="stability_warn_battery">배터리 최적화 켜짐 — 시스템이 프록시를 제한할 수 있음</string>
+    <string name="stability_warn_background">백그라운드 사용 제한됨 — 프록시가 중단될 수 있음</string>
+    <string name="stability_warn_data_saver">데이터 절약 모드가 백그라운드 셀룰러를 막을 수 있음</string>
     <string name="stability_fix">설정</string>
     <string name="stability_open_app_settings">앱 정보</string>
 </resources>

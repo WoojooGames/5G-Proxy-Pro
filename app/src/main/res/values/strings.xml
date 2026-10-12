@@ -129,10 +129,13 @@ Also set this App\'s battery saver to \"No restrictions\".</string>
     <string name="stability_wifi_lock">Keep Wi-Fi awake (disable Wi-Fi power save)</string>
     <string name="stability_high_priority">High-priority packet processing</string>
     <string name="stability_hint">Options apply on next start. CPU wake lock and foreground service are always on.</string>
-    <string name="stability_check_battery">Battery optimization disabled</string>
-    <string name="stability_check_background">Background usage not restricted</string>
-    <string name="stability_check_data_saver">Not blocked by Data Saver</string>
+    <string name="stability_check_battery">Battery optimization: app excluded</string>
+    <string name="stability_check_background">Background usage: not restricted</string>
+    <string name="stability_check_data_saver">Data Saver: not blocking</string>
     <string name="stability_vendor_hint">Samsung etc.: App info → Battery → \"Unrestricted\", and keep the app out of sleeping apps</string>
+    <string name="stability_warn_battery">Battery optimization is on — the system may throttle the proxy</string>
+    <string name="stability_warn_background">Background usage is restricted — the proxy may be stopped</string>
+    <string name="stability_warn_data_saver">Data Saver may block background cellular data</string>
     <string name="stability_fix">Fix</string>
     <string name="stability_open_app_settings">App info</string>
 </resources>

@@ -766,13 +766,14 @@ class DebugActivity : Activity() {
     private fun renderStabilityChecks() {
         if (!::stabilityChecksLayout.isInitialized) return
         stabilityChecksLayout.removeAllViews()
-        fun row(ok: Boolean, labelRes: Int, onFix: () -> Unit) {
+        // 상태에 따라 문장이 달라야 한다: "⚠️ 배터리 최적화 제외됨"처럼 경고 아이콘과 정상 문구가 섞이면 오해를 부른다.
+        fun row(ok: Boolean, okRes: Int, warnRes: Int, onFix: () -> Unit) {
             stabilityChecksLayout.addView(LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(0, 4, 0, 4)
                 addView(TextView(context).apply {
-                    text = (if (ok) "✅ " else "⚠️ ") + getString(labelRes)
+                    text = if (ok) "✅ " + getString(okRes) else "⚠️ " + getString(warnRes)
                     textSize = 14f
                     setTextColor(if (ok) 0xFF495057.toInt() else 0xFFB02A37.toInt())
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -784,13 +785,13 @@ class DebugActivity : Activity() {
                 })
             })
         }
-        row(BackgroundStability.isBatteryOptimizationIgnored(this), R.string.stability_check_battery) {
+        row(BackgroundStability.isBatteryOptimizationIgnored(this), R.string.stability_check_battery, R.string.stability_warn_battery) {
             PowerPermissionHelper.requestIgnoreBatteryOptimization(this)
         }
-        row(!BackgroundStability.isBackgroundRestricted(this), R.string.stability_check_background) {
+        row(!BackgroundStability.isBackgroundRestricted(this), R.string.stability_check_background, R.string.stability_warn_background) {
             BackgroundStability.openAppDetails(this)
         }
-        row(!BackgroundStability.isDataSaverBlocking(this), R.string.stability_check_data_saver) {
+        row(!BackgroundStability.isDataSaverBlocking(this), R.string.stability_check_data_saver, R.string.stability_warn_data_saver) {
             BackgroundStability.openDataSaverException(this)
         }
         // 제조사 자체 절전(삼성 "절전 예외 앱/잠자는 앱" 등)은 API로 확인할 수 없어 안내 + 앱 정보 바로가기만 둔다.
